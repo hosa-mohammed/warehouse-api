@@ -1,11 +1,16 @@
+import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 
-SQLALCHEMY_DATABASE_URL = "postgresql://postgres.wdcfyhsnjbcidpzhlvno:[password]@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres?sslmode=require"
+SQLALCHEMY_DATABASE_URL = os.getenv(
+    "DATABASE_URL", 
+    "postgresql://postgres.wdcfyhsnjbcidpzhlvno:QWER-1234asdfg@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres"
+)
 
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL, 
-    echo=True
+    echo=True,
+    connect_args={"sslmode": "require"} if "supabase" in SQLALCHEMY_DATABASE_URL else {}
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

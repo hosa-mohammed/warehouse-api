@@ -1,8 +1,10 @@
-
 from fastapi import FastAPI, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
 from datetime import timedelta
+
+
+from fastapi_cache.decorator import cache 
 
 from app.database import engine, Base, SessionLocal
 from app.models import User, Product, Category, Order
@@ -12,19 +14,29 @@ from app.schemas import (
     OrderCreate, OrderUpdate, OrderResponse,
     UserCreate, UserLogin, Token
 )
+
+
 from app.security import (
     get_password_hash, verify_password,
-    create_access_token, get_current_user, get_db,
+    create_access_token, get_current_user, 
     ACCESS_TOKEN_EXPIRE_MINUTES, oauth2_scheme
 )
+
+
+from app.cache import init_cache 
 
 
 app = FastAPI()
 
 
+
 @app.on_event("startup")
-def startup_event():
+async def startup_event():
+
     Base.metadata.create_all(bind=engine)
+
+    await init_cache(app)
+
 
 
 def get_db():
@@ -38,13 +50,10 @@ def get_db():
 
 @app.post("/users/", response_model=dict, status_code=status.HTTP_201_CREATED)
 def create_user(user: UserCreate, db: Session = Depends(get_db)):
-    """Register a new user."""
-
     db_user = db.query(User).filter(User.username == user.username).first()
     if db_user:
         raise HTTPException(status_code=400, detail="Username already registered")
     
-
     hashed_password = get_password_hash(user.password)
     db_user = User(username=user.username, hashed_password=hashed_password)
     db.add(db_user)
@@ -54,7 +63,6 @@ def create_user(user: UserCreate, db: Session = Depends(get_db)):
 
 @app.post("/token", response_model=Token)
 def login_for_access_token(user: UserLogin, db: Session = Depends(get_db)):
-    """Authenticate a user and return a JWT token."""
     db_user = db.query(User).filter(User.username == user.username).first()
     if not db_user or not verify_password(user.password, db_user.hashed_password):
         raise HTTPException(
@@ -70,21 +78,22 @@ def login_for_access_token(user: UserLogin, db: Session = Depends(get_db)):
 
 @app.get("/users/me")
 def read_users_me(current_user: User = Depends(get_current_user)):
-    """Get the current authenticated user's profile."""
     return current_user
 
 
 
 @app.post("/products/", response_model=ProductResponse, status_code=status.HTTP_201_CREATED)
 def create_product(product: ProductCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Create a new product. Requires authentication."""
-    db_product = Product(**product.dict())
+
+    db_product = Product(**product.model_dump())
     db.add(db_product)
     db.commit()
     db.refresh(db_product)
     return db_product
 
 @app.get("/products/", response_model=List[ProductResponse])
+
+@cache(expire=60) 
 def get_all_products(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -95,34 +104,23 @@ def get_all_products(
     min_price: float = None, 
     max_price: float = None  
 ):
-
     if limit > max_limit:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Limit cannot exceed {max_limit}"
-        )
-
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Limit cannot exceed {max_limit}")
 
     query = db.query(Product)
 
-
     if search:
         query = query.filter(Product.name.ilike(f"%{search}%"))
-
-
     if min_price is not None:
         query = query.filter(Product.price >= min_price)
     if max_price is not None:
         query = query.filter(Product.price <= max_price)
 
-
     products = query.offset(skip).limit(limit).all()
-    
     return products
 
 @app.get("/products/{product_id}", response_model=ProductResponse)
 def get_product(product_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Get a single product by ID. Requires authentication."""
     db_product = db.query(Product).filter(Product.id == product_id).first()
     if not db_product:
         raise HTTPException(status_code=404, detail="Product not found")
@@ -130,12 +128,12 @@ def get_product(product_id: int, db: Session = Depends(get_db), current_user: Us
 
 @app.put("/products/{product_id}", response_model=ProductResponse)
 def update_product(product_id: int, product: ProductUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Update an existing product. Requires authentication."""
     db_product = db.query(Product).filter(Product.id == product_id).first()
     if not db_product:
         raise HTTPException(status_code=404, detail="Product not found")
     
-    update_data = product.dict(exclude_unset=True)
+
+    update_data = product.model_dump(exclude_unset=True)
     for key, value in update_data.items():
         setattr(db_product, key, value)
     
@@ -145,11 +143,9 @@ def update_product(product_id: int, product: ProductUpdate, db: Session = Depend
 
 @app.delete("/products/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_product(product_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Delete a product. Requires authentication."""
     db_product = db.query(Product).filter(Product.id == product_id).first()
     if not db_product:
         raise HTTPException(status_code=404, detail="Product not found")
-    
     db.delete(db_product)
     db.commit()
 
@@ -157,7 +153,6 @@ def delete_product(product_id: int, db: Session = Depends(get_db), current_user:
 
 @app.post("/categories/", response_model=CategoryResponse, status_code=status.HTTP_201_CREATED)
 def create_category(category: CategoryCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Create a new category. Requires authentication."""
     db_category = db.query(Category).filter(Category.name == category.name).first()
     if db_category:
         raise HTTPException(status_code=400, detail="Category with this name already exists")
@@ -170,12 +165,10 @@ def create_category(category: CategoryCreate, db: Session = Depends(get_db), cur
 
 @app.get("/categories/", response_model=List[CategoryResponse])
 def get_all_categories(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Get a list of all categories. Requires authentication."""
     return db.query(Category).all()
 
 @app.get("/categories/{category_id}", response_model=CategoryResponse)
 def get_category(category_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Get a single category by ID. Requires authentication."""
     db_category = db.query(Category).filter(Category.id == category_id).first()
     if not db_category:
         raise HTTPException(status_code=404, detail="Category not found")
@@ -183,7 +176,6 @@ def get_category(category_id: int, db: Session = Depends(get_db), current_user: 
 
 @app.put("/categories/{category_id}", response_model=CategoryResponse)
 def update_category(category_id: int, category: CategoryUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Update an existing category. Requires authentication."""
     db_category = db.query(Category).filter(Category.id == category_id).first()
     if not db_category:
         raise HTTPException(status_code=404, detail="Category not found")
@@ -200,7 +192,6 @@ def update_category(category_id: int, category: CategoryUpdate, db: Session = De
 
 @app.delete("/categories/{category_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_category(category_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Delete a category. Requires authentication."""
     db_category = db.query(Category).filter(Category.id == category_id).first()
     if not db_category:
         raise HTTPException(status_code=404, detail="Category not found")
@@ -211,11 +202,10 @@ def delete_category(category_id: int, db: Session = Depends(get_db), current_use
     db.delete(db_category)
     db.commit()
 
-# --- Order Endpoints (Protected) ---
+
 
 @app.post("/orders/", response_model=OrderResponse, status_code=status.HTTP_201_CREATED)
 def create_order(order: OrderCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Create a new order. Requires authentication."""
     new_order = Order(customer_name=order.customer_name)
     db.add(new_order)
     db.commit()
@@ -241,12 +231,10 @@ def create_order(order: OrderCreate, db: Session = Depends(get_db), current_user
 
 @app.get("/orders/", response_model=List[OrderResponse])
 def get_all_orders(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Get a list of all orders. Requires authentication."""
     return db.query(Order).all()
 
 @app.get("/orders/{order_id}", response_model=OrderResponse)
 def get_order(order_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Get a single order by ID. Requires authentication."""
     db_order = db.query(Order).filter(Order.id == order_id).first()
     if not db_order:
         raise HTTPException(status_code=404, detail="Order not found")
@@ -254,7 +242,6 @@ def get_order(order_id: int, db: Session = Depends(get_db), current_user: User =
 
 @app.put("/orders/{order_id}", response_model=OrderResponse)
 def update_order(order_id: int, order: OrderUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Update an existing order. Requires authentication."""
     db_order = db.query(Order).filter(Order.id == order_id).first()
     if not db_order:
         raise HTTPException(status_code=404, detail="Order not found")
@@ -268,97 +255,18 @@ def update_order(order_id: int, order: OrderUpdate, db: Session = Depends(get_db
 
 @app.delete("/orders/{order_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_order(order_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Delete an order. Requires authentication."""
     db_order = db.query(Order).filter(Order.id == order_id).first()
     if not db_order:
         raise HTTPException(status_code=404, detail="Order not found")
     
-
     for product in db_order.products:
         product.quantity += db_order.products.count(product)
     
     db.delete(db_order)
     db.commit()
 
-# --- Root Endpoint ---
+
+
 @app.get("/")
 def read_root():
     return {"message": "Welcome to Warehouse API"}
-# app/main.py
-from fastapi import FastAPI, Depends, HTTPException, status
-from sqlalchemy.orm import Session
-from typing import List
-from datetime import timedelta
-
-from app.database import engine, Base, SessionLocal
-from app.models import User, Product, Category, Order
-from app.schemas import (
-    ProductCreate, ProductUpdate, ProductResponse,
-    CategoryCreate, CategoryUpdate, CategoryResponse,
-    OrderCreate, OrderUpdate, OrderResponse,
-    UserCreate, UserLogin, Token
-)
-from app.security import (
-    get_password_hash, verify_password,
-    create_access_token, get_current_user, get_db,
-    ACCESS_TOKEN_EXPIRE_MINUTES, oauth2_scheme
-)
-
-from app.cache import init_cache, get_cached_products
-
-app = FastAPI()
-
-
-init_cache(app)
-
-
-
-@app.post("/products/", response_model=ProductResponse, status_code=status.HTTP_201_CREATED)
-def create_product(product: ProductCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Create a new product. Requires authentication."""
-    db_product = Product(**product.dict())
-    db.add(db_product)
-    db.commit()
-    db.refresh(db_product)
-    return db_product
-
-@app.get("/products/", response_model=List[ProductResponse])
-@cache(expire=60) 
-def get_all_products(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-    skip: int = 0,
-    limit: int = 100,
-    max_limit: int = 100,
-    search: str = None,
-    min_price: float = None,
-    max_price: float = None
-):
-    """
-    Get a list of all products with optional search, filtering, and pagination.
-    Requires authentication. Results are cached for 60 seconds.
-    """
-
-    if limit > max_limit:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Limit cannot exceed {max_limit}"
-        )
-
-
-    query = db.query(Product)
-
-
-    if search:
-        query = query.filter(Product.name.ilike(f"%{search}%"))
-
-
-    if min_price is not None:
-        query = query.filter(Product.price >= min_price)
-    if max_price is not None:
-        query = query.filter(Product.price <= max_price)
-
-    products = query.offset(skip).limit(limit).all()
-    
-    return products
-
