@@ -2,7 +2,6 @@ from pydantic import BaseModel
 from typing import List, Optional
 
 
-# --- Product Schemas ---
 class ProductCreate(BaseModel):
     name: str
     description: Optional[str] = None
@@ -23,7 +22,6 @@ class ProductResponse(ProductCreate):
         from_attributes = True
 
 
-# --- Category Schemas ---
 class CategoryCreate(BaseModel):
     name: str
 
@@ -37,7 +35,6 @@ class CategoryResponse(CategoryCreate):
         from_attributes = True
 
 
-# --- Order Schemas ---
 class OrderItem(BaseModel):
     product_id: int
     quantity: int
@@ -57,7 +54,6 @@ class OrderResponse(OrderUpdate):
         from_attributes = True
 
 
-# --- User Schemas ---
 class UserCreate(BaseModel):
     username: str
     password: str
@@ -76,8 +72,6 @@ class UserLogin(BaseModel):
     username: str
     password: str
 
-
-# --- Auth / Token Schemas ---
 class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
